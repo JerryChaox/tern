@@ -8,25 +8,7 @@
     shift: "格局变化", emerging: "新词", volume: "投稿量", regime: "整体态势", thesis: "我的判断",
   };
   const TERM_STATUS = { new: "全新", revival: "回潮", rising: "升温" };
-  // Headline candidates, in order: structural shifts (the 2016-GPU shape) beat single-term spikes.
-  const HEADLINE_KINDS = ["synchrony", "diffusion", "regime", "acceleration", "shift"];
-  const FEED_PER_KIND = 2;
-  // Feed order: structural signals, then the user's theses, then term spikes and raw volume.
-  const FEED_ORDER = [...HEADLINE_KINDS, "deceleration", "thesis", "emerging", "volume"];
-
-  // Insight scores are not comparable across kinds (term cards score high by construction),
-  // so the front page caps each kind and leads with the strongest structural signal.
-  function frontPage(items) {
-    const hero = HEADLINE_KINDS.map(k => items.find(i => i.kind === k)).find(Boolean) || items[0] || null;
-    const per = {}, feed = [];
-    for (const it of items) {
-      if (it === hero || (per[it.kind] = (per[it.kind] || 0) + 1) > FEED_PER_KIND) continue;
-      feed.push(it);
-    }
-    const rank = k => (FEED_ORDER.indexOf(k) + FEED_ORDER.length + 1) % (FEED_ORDER.length + 1);
-    feed.sort((x, y) => rank(x.kind) - rank(y.kind) || y.score - x.score);
-    return { hero, feed };
-  }
+  const FEED_PER_KIND = 2;  // mirrors views.FEED_PER_KIND on the server
 
   // Curve wall order: groups holding the user's own signals first; within a group, biggest change first.
   function wallGroups(signals, stats) {
@@ -92,7 +74,7 @@
     else if (!compact && ev.cat && S.snap?.volume[ev.cat]) spark = `<svg data-vol="${esc(ev.cat)}"></svg>`;
     const papers = !compact && ev.papers?.length
       ? `<ul class="i-papers">${ev.papers.slice(0, 3).map(p => `<li><a href="${arxiv(p.id)}" target="_blank" rel="noopener">${esc(p.title)}</a></li>`).join("")}</ul>` : "";
-    const link = ev.slug ? `#/signal/${ev.slug}` : ev.term ? `#/papers?q=${encodeURIComponent(ev.term)}` : null;
+    const link = it.path || null;
     return `<article class="card insight ${compact ? "compact" : ""} ${it.status}" data-id="${it.id}">
       <div class="i-meta"><span class="kind ${it.kind}"><i></i>${KIND[it.kind] || it.kind}</span>
         <span>${Charts.weekRange(it.week)}</span>
@@ -169,35 +151,105 @@
   async function loadSnap() { S.snap = await api("/api/snapshot"); }
 
   // ---- router ------------------------------------------------------------
+  // Real paths (the server renders the same routes for crawlers and first paint).
   function route() {
-    const h = location.hash.replace(/^#\/?/, "");
-    const [path, query] = h.split("?");
-    const parts = path.split("/").filter(Boolean);
-    const qs = Object.fromEntries(new URLSearchParams(query || ""));
+    const parts = location.pathname.split("/").filter(Boolean);
+    const qs = Object.fromEntries(new URLSearchParams(location.search));
     if (parts[0] === "signal" && parts[1]) return { name: "signal", slug: decodeURIComponent(parts[1]), qs };
     if (parts[0] === "signals" && parts[1] === "new") return { name: "signals-new", qs };
+    if (parts[0] === "brief" && parts[1]) return { name: "brief", week: parts[1], qs };
+    if (parts[0] === "insight" && parts[1]) return { name: "insight", id: parseInt(parts[1], 10), qs };
     return { name: parts[0] || "radar", qs };
   }
+
+  function go(path) {
+    history.pushState(null, "", path);
+    render();
+  }
+
+  // Same-origin links navigate inside the app; API, files and modified clicks keep browser behavior.
+  document.addEventListener("click", ev => {
+    const a = ev.target.closest("a[href]");
+    if (!a || ev.defaultPrevented || ev.button !== 0 || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
+    if (a.target || a.hasAttribute("download") || a.origin !== location.origin) return;
+    if (a.pathname.startsWith("/api/") || /\.\w+$/.test(a.pathname)) return;
+    if (a.getAttribute("href").startsWith("#")) return;
+    ev.preventDefault();
+    if (a.pathname + a.search !== location.pathname + location.search) go(a.pathname + a.search);
+  });
+  window.addEventListener("popstate", render);
 
   function render() {
     const r = route();
     document.querySelectorAll("#tabs a").forEach(a => {
       const t = a.dataset.tab;
-      a.classList.toggle("on", t === r.name || (t === "signals" && (r.name === "signal" || r.name === "signals-new")));
+      a.classList.toggle("on", t === r.name || (t === "signals" && (r.name === "signal" || r.name === "signals-new"))
+        || (t === "insights" && r.name === "insight") || (t === "briefs" && r.name === "brief"));
     });
     if (!S.snap?.ready && r.name !== "papers") return notReady();
-    const views = { radar, timeline, insights, signals: signalsView, signal: signalsView, "signals-new": signalsView, theses, papers };
+    const views = { radar, timeline, insights, insight, briefs, brief, signals: signalsView, signal: signalsView, "signals-new": signalsView, theses, papers };
+    document.title = TITLES[r.name] ? `${TITLES[r.name]} · Tern` : "Tern 研究雷达";
     (views[r.name] || radar)(r);
     window.scrollTo({ top: 0 });
   }
-  window.addEventListener("hashchange", render);
+  const TITLES = { timeline: "时间线", insights: "洞察", briefs: "研究周报", signals: "信号", theses: "我的判断", papers: "论文" };
+
+  // ---- weekly briefs -----------------------------------------------------
+  // Brief bodies are structured sections built on the server; the same JSON renders here and in the crawler HTML.
+  function briefSections(sections) {
+    return sections.map(s => `<h2 class="section">${esc(s.h)}</h2>
+      ${(s.p || []).map(p => `<p>${esc(p)}</p>`).join("")}
+      ${s.items ? `<ul class="brief-list">${s.items.map(i => `<li><a href="${esc(i.href)}"${i.external ? ` target="_blank" rel="noopener"` : ""}>${esc(i.text)}</a>${i.note ? `<div class="muted">${esc(i.note)}</div>` : ""}</li>`).join("")}</ul>` : ""}
+      ${s.md ? `<div class="memo">${md(s.md)}</div>` : ""}`).join("");
+  }
+
+  async function briefs() {
+    const list = await api("/api/briefs");
+    $view.innerHTML = `
+      <div class="page-head"><div><h1>研究周报</h1>
+        <p>每周一篇，基于当周 arXiv 论文数据自动写成：跳升最快的方向、新出现的说法、值得读的论文，以及当周的洞察。</p></div></div>
+      <div class="feed">${list.map(b => `<article class="card insight"><div class="i-meta"><span>${Charts.weekRange(b.week)}</span></div>
+        <h3><a href="/brief/${b.week}">${esc(b.title.split("：").slice(1).join("：") || b.title)}</a></h3><p>${esc(b.summary)}</p></article>`).join("")
+        || `<div class="card empty"><p>还没有周报。</p></div>`}</div>`;
+  }
+
+  async function brief(r) {
+    let b;
+    try { b = await api(`/api/briefs/${r.week}`); } catch (e) { b = null; }
+    if (!b) { $view.innerHTML = `<div class="card empty"><p>这一周没有周报。<a href="/briefs">查看全部周报</a></p></div>`; return; }
+    document.title = `${b.title} · Tern`;
+    $view.innerHTML = `<article class="brief">
+      <div class="page-head"><div><div class="eyebrow">研究周报 · ${Charts.weekRange(b.week)}</div>
+        <h1>${esc(b.title.split("：").slice(1).join("：") || b.title)}</h1><p>${esc(b.summary)}</p></div></div>
+      ${briefSections(b.body.sections)}
+      <p class="brief-nav">${b.prev ? `<a href="/brief/${b.prev}">← 上一周</a>` : ""}${b.prev && b.next ? " · " : ""}${b.next ? `<a href="/brief/${b.next}">下一周 →</a>` : ""}</p>
+    </article>`;
+  }
+
+  // ---- single insight ------------------------------------------------------
+  async function insight(r) {
+    const [it] = await api(`/api/insights?id=${r.id}`);
+    if (!it) { $view.innerHTML = `<div class="card empty"><p>这条洞察不存在或已过期。<a href="/insights">查看全部洞察</a></p></div>`; return; }
+    document.title = `${it.title} · Tern`;
+    const ev = it.evidence || {};
+    const slugs = ev.slug ? [ev.slug] : ev.slugs || [];
+    const others = (await api(`/api/insights?subject=${encodeURIComponent(it.subject)}&limit=20`)).filter(o => o.id !== it.id);
+    $view.innerHTML = `
+      <div class="feed" style="max-width:880px">${insightCard(it)}</div>
+      ${slugs.length ? `<h2 class="section">相关信号</h2><p>${slugs.map(s => `<a class="tag" href="/signal/${s}">${esc(sigBy(s)?.name || s)}</a>`).join(" ")}</p>` : ""}
+      ${ev.term ? `<p><a href="/papers?q=${encodeURIComponent(ev.term)}">查看使用“${esc(ev.term)}”的全部论文 →</a></p>` : ""}
+      ${others.length ? `<h2 class="section">同一主题的其他洞察</h2><div class="feed" style="max-width:880px">${others.map(o => insightCard(o, { compact: true, actions: false })).join("")}</div>` : ""}
+      <p style="margin-top:16px"><a href="/brief/${it.week}">这一周的研究周报 →</a></p>`;
+    hydrateSparks($view);
+    bindInsightActions($view, () => render());
+  }
 
   // ---- radar -------------------------------------------------------------
   async function radar() {
     const snap = S.snap;
-    const items = await api(`/api/insights?week=${snap.analysis_week}&limit=40`);
-    const memoRes = await api("/api/memo");
-    const { hero: top, feed } = frontPage(items);
+    const [items, memoRes, front] = await Promise.all([
+      api(`/api/insights?week=${snap.analysis_week}&limit=40`), api("/api/memo"), api("/api/frontpage")]);
+    const { hero: top, feed } = front;
     const accel = Object.values(snap.stats).filter(s => s.new || (s.lift && s.lift >= 1.25) ).length;
     const totalPapers = S.status?.papers ?? 0;
     const groups = wallGroups(snap.signals, snap.stats);
@@ -207,6 +259,7 @@
         <div class="eyebrow">研究简报 · ${Charts.weekRange(snap.analysis_week)} · 近 ${snap.windows.recent} 周 vs 此前 ${snap.windows.base} 周</div>
         <h1>${top ? esc(top.title) : "本周没有显著变化"}</h1>
         ${top ? `<p>${esc(top.body)}</p>` : ""}
+        <p style="margin-top:10px"><a href="/brief/${snap.analysis_week}">阅读本周研究周报 →</a></p>
       </div></div>
       <div class="stats">
         <div class="card stat"><div class="label">已读论文</div><div class="value num">${totalPapers.toLocaleString()}</div><div class="hint">${snap.categories.length} 个 arXiv 分类</div></div>
@@ -223,7 +276,7 @@
             <div class="wall-group"><h4>${esc(g)}</h4><div class="wall">
               ${list.map(s => {
                 const st = snap.stats[s.slug];
-                return `<a class="card tile" href="#/signal/${s.slug}">
+                return `<a class="card tile" href="/signal/${s.slug}">
                   <div class="t-head"><span class="t-name">${esc(s.name)}</span>${liftBadge(st)}</div>
                   <div class="t-val num">${pct(st.recent_share, st.recent_share < 0.01 ? 2 : 1)} <span class="muted">· ${st.recent_count} 篇</span></div>
                   <svg data-spark="${s.slug}"></svg></a>`;
@@ -234,10 +287,10 @@
           <h2 class="section">本周洞察</h2>
           <p class="section-sub">每次抓取后自动重算；每种类型最多显示 ${FEED_PER_KIND} 条，新词的完整列表见下方新词雷达。</p>
           <div class="feed" id="feed">${feed.slice(0, 8).map(it => insightCard(it, { compact: true, actions: false })).join("") || `<p class="muted">暂无</p>`}</div>
-          <p style="margin-top:12px"><a href="#/insights">查看全部洞察 →</a></p>
+          <p style="margin-top:12px"><a href="/insights">查看全部洞察 →</a></p>
           ${snap.emerging.length ? `<h2 class="section">新词雷达</h2><p class="section-sub">近期相对频率飙升的术语；全新 = 有数据以来首次出现，回潮 = 基线期没有、更早出现过</p>
             <div class="card" style="padding:6px 14px"><table class="data"><thead><tr><th>术语</th><th>类型</th><th>近期</th><th>基线</th><th>倍数</th></tr></thead><tbody>
-            ${snap.emerging.slice(0, 10).map(t => `<tr><td><a class="term" href="#/papers?q=${encodeURIComponent(t.term)}">${esc(t.term)}</a></td><td class="muted nowrap" title="${t.first_week ? `最早 ${t.first_week} 周` : ""}">${TERM_STATUS[t.status] || ""}</td><td class="num">${t.recent}</td><td class="num">${t.base}</td><td class="num">${t.lift.toFixed(1)}×</td></tr>`).join("")}
+            ${snap.emerging.slice(0, 10).map(t => `<tr><td><a class="term" href="/papers?q=${encodeURIComponent(t.term)}">${esc(t.term)}</a></td><td class="muted nowrap" title="${t.first_week ? `最早 ${t.first_week} 周` : ""}">${TERM_STATUS[t.status] || ""}</td><td class="num">${t.recent}</td><td class="num">${t.base}</td><td class="num">${t.lift.toFixed(1)}×</td></tr>`).join("")}
             </tbody></table></div>` : ""}
         </aside>
       </div>
@@ -291,12 +344,12 @@
         ${tl.map(w => {
           const ins = (byWeek[w.week] || []).sort((a, b) => b.score - a.score);
           return `<div class="tl-week ${ins.length ? "has-insight" : ""}">
-            <div class="tl-date"><b>${Charts.weekRange(w.week)}</b><span class="num">${w.volume.toLocaleString()} 篇投稿</span>${w.sampled ? `<span class="sample-badge" title="该周为样本：${w.papers} 篇">样本</span>` : ""}</div>
+            <div class="tl-date"><b><a href="/brief/${w.week}" title="这一周的研究周报">${Charts.weekRange(w.week)}</a></b><span class="num">${w.volume.toLocaleString()} 篇投稿</span>${w.sampled ? `<span class="sample-badge" title="该周为样本：${w.papers} 篇">样本</span>` : ""}</div>
             <div class="card tl-body">
-              ${w.risers.length ? `<div class="tl-row"><span class="lbl">跳升</span><span class="vals">${w.risers.filter(r => r.lift > 1.05).slice(0, 4).map(r => `<a class="tag" href="#/signal/${r.slug}">${esc(r.name)} <span class="lift up">${r.lift.toFixed(2)}×</span></a>`).join("") || `<span class="muted small">无明显跳升</span>`}</span></div>` : ""}
-              ${w.terms.length ? `<div class="tl-row"><span class="lbl">新词</span><span class="vals">${w.terms.map(t => `<a class="term" href="#/papers?q=${encodeURIComponent(t.term)}&week=${w.week}" title="${t.count} 篇 · ${t.lift.toFixed(1)}×">${esc(t.term)}</a>`).join("")}</span></div>` : ""}
+              ${w.risers.length ? `<div class="tl-row"><span class="lbl">跳升</span><span class="vals">${w.risers.filter(r => r.lift > 1.05).slice(0, 4).map(r => `<a class="tag" href="/signal/${r.slug}">${esc(r.name)} <span class="lift up">${r.lift.toFixed(2)}×</span></a>`).join("") || `<span class="muted small">无明显跳升</span>`}</span></div>` : ""}
+              ${w.terms.length ? `<div class="tl-row"><span class="lbl">新词</span><span class="vals">${w.terms.map(t => `<a class="term" href="/papers?q=${encodeURIComponent(t.term)}&week=${w.week}" title="${t.count} 篇 · ${t.lift.toFixed(1)}×">${esc(t.term)}</a>`).join("")}</span></div>` : ""}
               ${w.notable.length ? `<div class="tl-row"><span class="lbl">代表论文</span><span class="vals" style="display:block"><ul class="tl-papers">${w.notable.map(p => `<li><a href="${arxiv(p.id)}" target="_blank" rel="noopener">${esc(p.title)}</a><span class="sigs">${esc(p.signals.join(" · "))}</span></li>`).join("")}</ul></span></div>` : ""}
-              ${ins.length ? `<div class="tl-ins">${ins.slice(0, 5).map(i => `<div><span class="kind ${i.kind}"><i></i>${KIND[i.kind]}</span> ${esc(i.title)}</div>`).join("")}${ins.length > 5 ? `<div class="small muted">另有 ${ins.length - 5} 条 · <a href="#/insights">查看</a></div>` : ""}</div>` : ""}
+              ${ins.length ? `<div class="tl-ins">${ins.slice(0, 5).map(i => `<div><span class="kind ${i.kind}"><i></i>${KIND[i.kind]}</span> <a href="${i.path}">${esc(i.title)}</a></div>`).join("")}${ins.length > 5 ? `<div class="small muted">另有 ${ins.length - 5} 条 · <a href="/insights">查看</a></div>` : ""}</div>` : ""}
             </div></div>`;
         }).join("")}
       </div>`;
@@ -334,7 +387,7 @@
     const counts = {};
     all.forEach(i => counts[i.kind] = (counts[i.kind] || 0) + 1);
     const list = kind ? all.filter(i => i.kind === kind) : all;
-    const q = (k, s) => `#/insights?${new URLSearchParams({ ...(k ? { kind: k } : {}), ...(s && s !== "active" ? { status: s } : {}) })}`;
+    const q = (k, s) => `/insights?${new URLSearchParams({ ...(k ? { kind: k } : {}), ...(s && s !== "active" ? { status: s } : {}) })}`;
     $view.innerHTML = `
       <div class="page-head"><div>
         <h1>洞察</h1>
@@ -361,8 +414,8 @@
     snap.signals.forEach(s => (groups[s.grp] = groups[s.grp] || []).push(s));
     $view.innerHTML = `<div class="sig-layout">
       <nav class="card sig-list">
-        <a href="#/signals/new" class="rw ${r.name === "signals-new" ? "on" : ""}"><b>＋ 新建信号</b></a>
-        ${Object.entries(groups).map(([g, list]) => `<h5>${esc(g)}</h5>${list.map(s => `<a href="#/signal/${s.slug}" class="${s.slug === slug && r.name !== "signals-new" ? "on" : ""}"><span>${esc(s.name)}</span>${liftBadge(snap.stats[s.slug])}</a>`).join("")}`).join("")}
+        <a href="/signals/new" class="rw ${r.name === "signals-new" ? "on" : ""}"><b>＋ 新建信号</b></a>
+        ${Object.entries(groups).map(([g, list]) => `<h5>${esc(g)}</h5>${list.map(s => `<a href="/signal/${s.slug}" class="${s.slug === slug && r.name !== "signals-new" ? "on" : ""}"><span>${esc(s.name)}</span>${liftBadge(snap.stats[s.slug])}</a>`).join("")}`).join("")}
       </nav>
       <div id="sig-detail"></div></div>`;
     const box = document.getElementById("sig-detail");
@@ -399,7 +452,7 @@
           ${catRows.map(({ c, v }) => `<tr><td>${c.name} <span class="muted">${c.id}</span></td><td class="num">${pct(v.recent, 2)}</td><td class="num">${pct(v.base, 2)}</td><td>${v.lift ? liftBadge({ lift: v.lift }) : "—"}</td><td class="num">${v.count}</td></tr>`).join("")}
           </tbody></table></div></section>
         ${ins.length ? `<section><h2 class="section" style="margin-top:8px">关于它的洞察</h2><div class="feed">${ins.map(i => insightCard(i, { compact: true, actions: false })).join("")}</div></section>` : ""}
-        <section><h2 class="section" style="margin-top:8px">最新论文 <span class="muted small">共 ${papers.total.toLocaleString()} 篇 · <a href="#/papers?signal=${slug}">全部</a></span></h2>
+        <section><h2 class="section" style="margin-top:8px">最新论文 <span class="muted small">共 ${papers.total.toLocaleString()} 篇 · <a href="/papers?signal=${slug}">全部</a></span></h2>
           <div>${papers.items.map(paperRow).join("")}</div></section>
         ${sig.custom ? `<p class="rw"><button class="btn" id="del-sig">删除这个自定义信号</button></p>` : ""}
       </div>`;
@@ -425,7 +478,7 @@
     drawCat("chart");
     segToggle("cat-mode", drawCat);
     const del = document.getElementById("del-sig");
-    if (del) del.onclick = async () => { await api(`/api/signals/${slug}`, { method: "DELETE" }); await waitAnalysis(); location.hash = "#/signals"; };
+    if (del) del.onclick = async () => { await api(`/api/signals/${slug}`, { method: "DELETE" }); await waitAnalysis(); go("/signals"); };
   }
 
   // Edits re-analyze synchronously on the server, so a fresh snapshot is ready on return.
@@ -462,7 +515,7 @@
       try {
         const res = await api("/api/signals", { body: Object.fromEntries(new FormData(f)) });
         await waitAnalysis();
-        location.hash = `#/signal/${res.slug}`;
+        go(`/signal/${res.slug}`);
       } catch (err) {
         document.getElementById("sig-err").textContent = err.message; btn.disabled = false; btn.textContent = "保存并回算历史";
       }
@@ -483,7 +536,7 @@
           const cls = t.verdict === "证据支持" ? "ok" : t.verdict === "证据相反" ? "bad" : "flat";
           return `<div class="card thesis-card">
             <div><blockquote>“${esc(t.text)}”</blockquote>
-              <div class="meta">预期${t.stance === "up" ? "上升" : "下降"} · ${t.slugs.map(s => `<a href="#/signal/${s}">${esc(sigBy(s)?.name || s)}</a>`).join("、")} · 写于 ${t.created_at.slice(0, 10)}
+              <div class="meta">预期${t.stance === "up" ? "上升" : "下降"} · ${t.slugs.map(s => `<a href="/signal/${s}">${esc(sigBy(s)?.name || s)}</a>`).join("、")} · 写于 ${t.created_at.slice(0, 10)}
                 <span class="rw">· <a href="#" data-del="${t.id}">删除</a></span></div>
               <div style="margin-top:8px"><span class="verdict ${cls}">${cls === "ok" ? "✓" : cls === "bad" ? "✕" : "○"} ${t.verdict}</span>
                 <span class="muted small">${t.lift ? `关联信号 ${t.lift.toFixed(2)}×` : ""}</span></div></div>
@@ -521,7 +574,7 @@
       <h3><a href="${arxiv(p.id)}" target="_blank" rel="noopener">${esc(p.title)}</a></h3>
       <div class="meta">${esc(authors)} · <span class="num">${p.id}</span> · ${p.primary_cat} · ${p.published.slice(0, 10)}</div>
       <p>${esc(p.abstract)}</p>
-      ${p.signals.length ? `<div class="sig-tags">${p.signals.map(s => `<a href="#/signal/${s}">${esc(sigBy(s)?.name || s)}</a>`).join("")}</div>` : ""}
+      ${p.signals.length ? `<div class="sig-tags">${p.signals.map(s => `<a href="/signal/${s}">${esc(sigBy(s)?.name || s)}</a>`).join("")}</div>` : ""}
     </article>`;
   }
 
@@ -562,6 +615,8 @@
 
   // ---- boot --------------------------------------------------------------
   (async () => {
+    // Old #/ links keep working.
+    if (location.hash.startsWith("#/")) history.replaceState(null, "", location.hash.slice(1));
     try { S.status = await api("/api/status"); S.lastJob = S.status.job.job; renderOps(); } catch (e) { }
     await loadSnap();
     render();

@@ -10,7 +10,7 @@ import time
 import traceback
 from datetime import datetime, timedelta, timezone
 
-from . import analysis, config, db, ingest, memo, publish
+from . import analysis, briefs, config, db, ingest, memo, publish
 
 _q = queue.Queue()
 _pending = set()
@@ -76,6 +76,8 @@ def _analyze():
             memo.generate(snap)
         except Exception as e:  # memo is optional; never fail the run over it
             db.kv_set("memo_error", f"{type(e).__name__}: {e}"[:400])
+        else:
+            briefs.update_all(snap["timeline"])  # fold the new memo into this week's brief
     return snap
 
 

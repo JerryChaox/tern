@@ -10,7 +10,7 @@ import re
 from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta, timezone
 
-from . import arxiv, config, db
+from . import arxiv, briefs, config, db
 
 STOP = set("""
 a about above after again against all also although among an and any are as at be because been before being
@@ -402,6 +402,7 @@ def run():
 
     _persist_insights(insights, analysis_week)
     timeline = build_timeline(weeks, cats, sigs, series, n, vol, sampled, df, per_week)
+    briefs.update_all(timeline)
 
     snap = {
         "ready": True,

@@ -92,6 +92,16 @@ CREATE TABLE IF NOT EXISTS runs (
   detail TEXT NOT NULL DEFAULT ''
 );
 
+CREATE TABLE IF NOT EXISTS briefs (
+  week TEXT PRIMARY KEY,          -- Monday of the week the brief covers
+  title TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  body TEXT NOT NULL,             -- JSON: {"sections": [...]}, rendered by both the server and the SPA
+  source TEXT NOT NULL,           -- template | template+claude
+  generated_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS kv (
   k TEXT PRIMARY KEY,
   v TEXT NOT NULL

@@ -4,7 +4,7 @@ import re
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import config, db, jobs, memo, signals
+from . import config, db, jobs, memo, seo, signals, views
 from .signals import now
 
 KINDS = {"acceleration", "deceleration", "synchrony", "diffusion", "shift", "emerging", "volume", "regime", "thesis"}
@@ -84,15 +84,46 @@ class Handler(BaseHTTPRequestHandler):
                                    "error": db.kv_get("memo_error")})
             if path == "/api/signal-preview":
                 return self._json(preview(qs.get("pattern", "")))
-            return self._static(path)
+            if path == "/api/frontpage":
+                snap = db.kv_get("snapshot", {})
+                hero, feed = views.front_page(views.insights(week=qs.get("week") or snap.get("analysis_week"), limit=40))
+                return self._json({"hero": hero, "feed": feed})
+            if path == "/api/briefs":
+                return self._json(views.brief_list())
+            m = re.fullmatch(r"/api/briefs/(\d{4}-\d{2}-\d{2})", path)
+            if m:
+                b = views.brief(m.group(1))
+                return self._json(b) if b else self._err(404, "这一周没有周报")
+            base = seo.base_url(self.headers.get("Host"))
+            if path == "/robots.txt":
+                return self._text(seo.robots(base), "text/plain")
+            if path == "/sitemap.xml":
+                return self._text(seo.sitemap(base), "application/xml")
+            if path == "/briefs.xml":
+                return self._text(seo.feed(base), "application/rss+xml")
+            return self._static(path, qs, base)
         except Exception as e:
             return self._err(500, f"{type(e).__name__}: {e}")
 
-    def _static(self, path):
-        rel = "index.html" if path in ("", "/") else path.lstrip("/")
-        f = (config.WEB_DIR / rel).resolve()
-        if config.WEB_DIR.resolve() not in f.parents or not f.is_file():
-            f = config.WEB_DIR / "index.html"
+    def _text(self, body, ctype, code=200):
+        data = body.encode()
+        self.send_response(code)
+        self.send_header("Content-Type", ctype + "; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _static(self, path, qs, base):
+        f = (config.WEB_DIR / path.lstrip("/")).resolve()
+        if path not in ("", "/") and config.WEB_DIR.resolve() in f.parents and f.is_file() and f.name != "index.html":
+            return self._file(f)
+        # App routes get the SPA shell with server-rendered content; anything else is a real 404.
+        page = seo.route(path, qs) or seo.page_not_found()
+        shell = (config.WEB_DIR / "index.html").read_text()
+        return self._text(seo.render(page, shell, base), "text/html", page.status)
+
+    def _file(self, f):
         data = f.read_bytes()
         self.send_response(200)
         self.send_header("Content-Type", (mimetypes.guess_type(f.name)[0] or "application/octet-stream") + "; charset=utf-8")
@@ -230,6 +261,8 @@ def _loaded_etag():
 
 
 def list_insights(qs):
+    if qs.get("id"):
+        return views.insights(status="all", ids=[int(qs["id"])], limit=1)
     where, args = [], []
     if qs.get("kind") in KINDS:
         where.append("kind=?"); args.append(qs["kind"])
@@ -248,6 +281,7 @@ def list_insights(qs):
     rows = db.q(sql, args)
     for r in rows:
         r["evidence"] = json.loads(r["evidence"])
+        r["path"] = views.insight_path(r)
     return rows
 
 

@@ -26,6 +26,8 @@ ALLOW_IPS = {s.strip() for s in os.environ.get("TERN_ALLOW_IPS", "").split(",") 
 PUBLISH_R2 = os.environ.get("TERN_PUBLISH_R2", "")
 PUBLISH_KEY = "tern.db"
 READONLY = os.environ.get("TERN_READONLY") == "1"
+# Absolute site URL for canonical links and the sitemap; empty = derived from the Host header.
+PUBLIC_URL = os.environ.get("TERN_PUBLIC_URL", "")
 
 # Local hour at which the daily fetch runs.
 DAILY_HOUR = int(os.environ.get("TERN_DAILY_HOUR", "7"))
