@@ -1,0 +1,28 @@
+// Tern online: a Worker in front of one read-only container.
+// The local instance publishes data/tern.db to R2 (TERN_PUBLISH_R2=tern-data);
+// the Worker pushes each new version into the container before serving.
+{
+  "name": "tern",
+  "main": "worker.js",
+  "compatibility_date": "2026-09-01",
+  "workers_dev": true,
+  "preview_urls": false,
+  "observability": { "enabled": true },
+  "containers": [
+    { "class_name": "TernContainer", "image": "../../Dockerfile", "image_build_context": "../..", "max_instances": 1, "instance_type": "basic" }
+  ],
+  "durable_objects": {
+    "bindings": [
+      { "name": "TERN", "class_name": "TernContainer" },
+      // One tiny object per client IP: exact sliding-window rate limit, checked before the container is touched.
+      { "name": "RATE", "class_name": "RateLimiter" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["TernContainer"] },
+    { "tag": "v2", "new_sqlite_classes": ["RateLimiter"] }
+  ],
+  "r2_buckets": [{ "binding": "DATA", "bucket_name": "tern-data" }],
+  // Optional client-IP allowlist (comma-separated); empty = public.
+  "vars": { "ALLOW_IPS": "", "RATE_LIMIT": "120", "RATE_WINDOW_S": "60" }
+}

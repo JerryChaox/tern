@@ -1,0 +1,11 @@
+{
+  "name": "tern-edge",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@cloudflare/containers": "0.3.7"
+  },
+  "devDependencies": {
+    "wrangler": "4.149.0"
+  }
+}

@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tern 研究雷达</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@500;700;900&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><path d='M3 22 L11 14 L17 18 L29 6' fill='none' stroke='%232a78d6' stroke-width='3.5' stroke-linecap='round' stroke-linejoin='round'/></svg>">
+</head>
+<body>
+<header class="masthead">
+  <div class="masthead-inner">
+    <a class="brand" href="#/radar">
+      <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M3 22 L11 14 L17 18 L29 6"/></svg></span>
+      <span class="brand-name">Tern</span>
+      <span class="brand-tag">从所有人都能看到的论文里，找出还没被意识到的重要性</span>
+    </a>
+    <div class="ops" id="ops"></div>
+  </div>
+  <nav class="tabs" id="tabs">
+    <a href="#/radar" data-tab="radar">雷达</a>
+    <a href="#/timeline" data-tab="timeline">时间线</a>
+    <a href="#/insights" data-tab="insights">洞察</a>
+    <a href="#/signals" data-tab="signals">信号</a>
+    <a href="#/theses" data-tab="theses">我的判断</a>
+    <a href="#/papers" data-tab="papers">论文</a>
+  </nav>
+</header>
+<main id="view" class="view"></main>
+<div id="tooltip" class="tooltip" role="tooltip" hidden></div>
+<script src="/charts.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>
